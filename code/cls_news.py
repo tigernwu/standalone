@@ -194,6 +194,8 @@ prompt = f"""。
 """
 
 response = llm_client.one_chat(prompt)
+date_str = datetime.now().strftime("%Y%m%d%H%M%S")
+file = f"markdowns/news/news{date_str}.md"
 # 创建或更新output.md文件
-with open("output.md", "w", encoding="utf-8") as f:
+with open(file, "w", encoding="utf-8") as f:
     f.write(response)
