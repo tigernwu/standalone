@@ -104,7 +104,8 @@ plt.savefig(wordcloud_file)
 plt.close()
 
 # 2. 使用LLM API进行新闻分析
-llm_client = llm_factory.get_instance()
+reporter = llm_factory.get_reporter()
+llm_client = llm_factory.get_reporter()
 
 news_batches = []
 current_batch = ""
@@ -144,7 +145,7 @@ for i, result in enumerate(analysis_results, 1):
 
 # 将结果保存到analysis_result变量
 analysis_result = "\n".join(results)
-reporter = llm_factory.get_reporter()
+
 # 使用LLM API生成markdown文件
 prompt = f"""。
 请将以下新闻分析结果整理成markdown格式的报告，并生成一个包含新闻标题词云图的markdown文件.
