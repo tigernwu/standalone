@@ -147,8 +147,8 @@ analysis_result = "\n".join(results)
 reporter = llm_factory.get_reporter()
 # 使用LLM API生成markdown文件
 prompt = f"""。
-请将以下新闻分析结果整理成markdown格式，并生成一个包含新闻标题词云图的markdown文件:
-
+请将以下新闻分析结果整理成markdown格式的报告，并生成一个包含新闻标题词云图的markdown文件.
+报告主要内容及markdown文件的结构如下：
 标题:xxxx年xx月xx日财经资讯分析报告
 (本次分析的时间范围：xxxx年xx月xx日xx点至xxxx年xx月xx日xx点)
 
@@ -189,10 +189,16 @@ prompt = f"""。
 
 请提供一个全面、深入、结构化的总结,整合所有批次的分析结果,突出最重要的发现和见解。
 
-之前总结的新闻内容如下：
+需要总结的新闻内容摘要如下：
 {analysis_result}
 """
 
+prompt1 = f"""
+请根据以下多批次的新闻摘要提供一个全面、深入、结构化的总结,整合所有批次的分析结果,突出最重要的发现和见解。包括标题、时间范围、主要市场趋势、金融市场动态、市场情绪分析、热点和异常事件、行业分析、政策和监管影响、风险评估、前瞻性展望和词云分析。请确保分析结果准确、全面，并提供详细的解释和分析。以markdown格式输出。
+
+需要总结的新闻内容摘要如下：
+{analysis_result}
+"""
 response = reporter.one_chat(prompt)
 date_str = datetime.now().strftime("%Y%m%d%H%M%S")
 file = f"markdowns/news/news{date_str}.md"
