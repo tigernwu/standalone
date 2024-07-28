@@ -144,7 +144,7 @@ for i, result in enumerate(analysis_results, 1):
 
 # 将结果保存到analysis_result变量
 analysis_result = "\n".join(results)
-
+reporter = llm_factory.get_reporter()
 # 使用LLM API生成markdown文件
 prompt = f"""。
 请将以下新闻分析结果整理成markdown格式，并生成一个包含新闻标题词云图的markdown文件:
@@ -193,7 +193,7 @@ prompt = f"""。
 {analysis_result}
 """
 
-response = llm_client.one_chat(prompt)
+response = reporter.one_chat(prompt)
 date_str = datetime.now().strftime("%Y%m%d%H%M%S")
 file = f"markdowns/news/news{date_str}.md"
 # 创建或更新output.md文件
