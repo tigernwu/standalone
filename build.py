@@ -1,5 +1,8 @@
-from core.down_llms import down_all_files,is_need_update
+from core.down_llms import download_all_files,is_socket_connected,check_proxy_running
 
 if __name__ == "__main__":
-    if is_need_update():
-        down_all_files()
+    proxy_host = "127.0.0.1"
+    proxy_port = 10809
+    if is_socket_connected(proxy_host, proxy_port):
+        check_proxy_running(proxy_host, proxy_port, "http")
+    download_all_files()
