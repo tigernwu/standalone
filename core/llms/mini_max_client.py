@@ -97,7 +97,8 @@ class MiniMaxClient(LLMApiClient):
         if is_stream:
             return self._process_stream_response(response)
         else:
-            
+            if 'base_resp' in response and response['base_resp']['status_code']!=200:
+                return response['base_resp']['status_msg']
             return response['choices'][0]['message']['content']
 
     def tool_chat(self, user_message: str, tools: List[Dict[str, Any]], function_module: Any, is_stream: bool = False) -> Union[str, Iterator[str]]:
