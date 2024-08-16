@@ -106,6 +106,11 @@ plt.close()
 # 2. 使用LLM API进行新闻分析
 reporter = llm_factory.get_reporter()
 llm_client = llm_factory.get_reporter()
+from core.llms.mini_max_client import MiniMaxClient
+if isinstance(llm_client, MiniMaxClient):
+    llm_client.debug=True
+if isinstance(reporter, MiniMaxClient):
+    reporter.debug=True
 
 news_batches = []
 current_batch = ""
