@@ -16,7 +16,8 @@ class CodeToolsRequired(metaclass=Singleton):
             "llm_client": self.llm_provider.new_llm_client(),
             "llm_factory": self.llm_provider.llm_factory,
             "data_summarizer": self.llm_provider._data_summarizer,
-            "code_runner":self.llm_provider.new_code_runner()
+            "code_runner":self.llm_provider.new_code_runner(),
+            "stock_data_provider":self.stock_data_provider
         }
         if config.has_key("tushare_key"):
             tushare_key = config.get("tushare_key")
