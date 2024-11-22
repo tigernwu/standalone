@@ -1,6 +1,6 @@
 from core.blueprint.llm_provider import LLMProvider
 from .single_ton import Singleton
-
+from dealer.stock_data_provider import StockDataProvider
 from .config_setting import Config
 
 class CodeToolsRequired(metaclass=Singleton):
@@ -10,6 +10,10 @@ class CodeToolsRequired(metaclass=Singleton):
         self._tools = code_tools
         config = Config()
         self.llm_provider = LLMProvider()
+        self.llm_client = self.llm_provider.new_llm_client()
+        self.stock_data_provider = StockDataProvider(self.llm_client)
+
+
         
         self.default_vars = {
             "llm_provider": self.llm_provider,
