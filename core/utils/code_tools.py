@@ -32,9 +32,15 @@ class CodeTools:
         with self._lock:
             self.data[name] = value
 
-    def get_var(self, name):
+    def get_var(self, name, default=None):
         with self._lock:
-            return self.data.get(name)
+            return self.data.get(name, default)
+    
+    def get(self, name, default=None):
+        return self.get_var(name, default)
+    
+    def keys(self):
+        return self.data.keys()
 
     def del_var(self, name):
         with self._lock:
@@ -61,7 +67,7 @@ class CodeTools:
                 print(f"Variable '{name}' already existed. Its value has been updated.")
             
             # Check if value is NOT one of the excluded types
-            if not isinstance(value, (str, int, float, bool, complex)):
+            if not isinstance(value, ( int, float, bool, complex)):
                 summary = self.summarizer.get_data_summary(value)
                 self.data[f"{name}_summary"] = summary
 
