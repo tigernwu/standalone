@@ -1,0 +1,42 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python 调试程序: task.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "task.py",
+            "console": "integratedTerminal",
+            "args": ["${input:taskName}", "${input:taskArgs}"]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "taskName",
+            "type": "pickString",
+            "description": "选择任务名称",
+            "options": [
+                "stock_price_predictor",
+                "cls_news",
+                "finance_analysis",
+                "random_forest",
+                "prophet_predict",
+                "arima_predict",
+                "gbm_predict",
+                "light_gbm_predict",
+                "xgboost_predict",
+                "gbdt_predict",
+                "cat_boost_predict",
+                "llm_index_predict",
+                "svm_predict",
+                "decisiontree_predict",
+            ]
+        },
+        {
+            "id": "taskArgs",
+            "type": "promptString",
+            "description": "输入任务参数",
+            "default": ""
+        }
+    ]
+}

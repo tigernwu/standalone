@@ -26,3 +26,13 @@ tenacity
 pdfplumber
 python-docx
 python-Levenshtein
+TA-Lib
+optuna
+catboost
+arch
+duckdb
+colorlog
+bs4
+py_mini_racer
+akshare
+ratelimit

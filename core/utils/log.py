@@ -6,7 +6,7 @@ def setup_logger():
     # 创建一个名为 "my_logger" 的 logger
     log_level = os.environ.get('LOG_LEVEL', 'ERROR')
     logger = logging.getLogger("my_logger")
-    level = getattr(logging, log_level)
+    level = getattr(logging, log_level.upper())
     logger.setLevel(level)
 
     # 创建一个控制台处理器
