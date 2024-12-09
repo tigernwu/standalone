@@ -30,6 +30,7 @@
                 "llm_index_predict",
                 "svm_predict",
                 "decisiontree_predict",
+                "portfolio",
             ]
         },
         {

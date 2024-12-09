@@ -36,3 +36,6 @@ bs4
 py_mini_racer
 akshare
 ratelimit
+skfolio
+PyPortfolioOpt
+riskfolio-lib
