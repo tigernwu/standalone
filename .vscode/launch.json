@@ -31,7 +31,8 @@
                 "svm_predict",
                 "decisiontree_predict",
                 "portfolio",
-                "py_portfolio_opt"
+                "py_portfolio_opt",
+                "risk_folio",
             ]
         },
         {
