@@ -1,9 +1,26 @@
 import numpy as np
 import pandas as pd
 import riskfolio as rp
+import seaborn as sns
 from typing import List, Dict, Any
 from task.stock_price_predictor import run_stock_prediction
 from core.stock.tushare_data_provider import get_technical_factor
+from matplotlib import pyplot as plt
+
+def plot_correlation_matrix(returns_data: pd.DataFrame):
+    """绘制相关性热图"""
+    corr = returns_data.corr()
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(corr, 
+                annot=True, 
+                cmap='coolwarm', 
+                center=0, 
+                fmt='.2f', 
+                square=True,
+                cbar_kws={"shrink": .5})
+    plt.title('资产收益率相关性热图')
+    plt.tight_layout()
+    return plt.gca()
 
 def optimize_portfolio(stock_predictions: Dict[str, Dict], 
                       historical_data: Dict[str, pd.DataFrame],
@@ -167,14 +184,8 @@ def runner():
             plt.tight_layout()
             plt.show()
         
-        # 2. 使用riskfolio的内置绘图功能
-        port = results['portfolio']
-        
-        # 绘制相关性热图
-        ax = rp.plot_correlation(returns=results['returns_data'],
-                               method='pearson',
-                               visual='heatmap')
-        plt.tight_layout()
+        # 2. 绘制相关性热图
+        plot_correlation_matrix(results['returns_data'])
         plt.show()
             
     except Exception as e:
