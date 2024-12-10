@@ -137,7 +137,7 @@ class StockPricePredictor:
             model.fit(train_pool, eval_set=val_pool)
             
             val_pred = model.predict(val_pool)
-            return mean_squared_error(val_pool.get_label(), val_pred, squared=False)
+            return mean_squared_error(val_pool.get_label(), val_pred)
 
         study = optuna.create_study(direction='minimize')
         study.optimize(objective, n_trials=n_trials)
