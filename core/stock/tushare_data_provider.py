@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from core.stock.baidu_news import BaiduFinanceAPI
+from datetime import datetime, timedelta
 import core.stock.tushare_provider as tp
 from core.utils.shared_cache import cache,lg_limiter,bg_limiter,cd_limiter,sn_limiter
 import akshare as ak
@@ -14,8 +15,175 @@ from cachetools import cached,LFUCache
 from core.utils.function_cache import FunctionCache
 function_cache = FunctionCache()
 import talib as ta
+from core.stock.ts_code_matcher import TsCodeMatcher
 
 analyze_cache=FunctionCache("./data/analyze_single_stock_cache.db")
+
+def get_minute_data(
+                    symbol: str,
+                    start_date: Optional[str] = None,
+                    end_date: Optional[str] = None,
+                    period: str = "1",
+                    adjust: str = "") -> pd.DataFrame:
+    """
+    Fetch minute-level K-line data for Chinese A-share stocks from East Money.
+    
+    Args:
+        symbol (str): Stock symbol, e.g., "000001"
+        start_date (str, optional): Start datetime in format "YYYY-MM-DD HH:MM:SS"
+                                Default fetches earliest available data
+        end_date (str, optional): End datetime in format "YYYY-MM-DD HH:MM:SS"
+                                Default fetches latest available data
+        period (str): Time period, options: {"1", "5", "15", "30", "60"}
+                    Note: 1-min data only available for last 5 trading days
+        adjust (str): Price adjustment, options: {"", "qfq", "hfq"}
+                    "": No adjustment, "qfq": Forward adjusted, "hfq": Backward adjusted
+                    Note: 1-min data cannot be adjusted
+    
+    Returns:
+        pd.DataFrame: DataFrame with columns:
+            - timestamp: datetime object
+            - open: Opening price
+            - close: Closing price
+            - high: Highest price
+            - low: Lowest price
+            - volume: Trading volume (in lots)
+            - amount: Trading amount
+            - vwap: Volume weighted average price (for 1-min data)
+            - change_pct: Price change percentage (for >1-min data)
+            - change: Price change (for >1-min data)
+            - amplitude: Price amplitude percentage (for >1-min data)
+            - turnover: Turnover rate percentage (for >1-min data)
+    
+    Raises:
+        ValueError: If invalid period or adjust parameters are provided
+    """
+    import akshare as ak
+    # Set default datetime range if not provided
+    start_date = start_date or "1979-09-01 09:32:00"
+    end_date = end_date or "2222-01-01 09:32:00"
+    
+    # Validate inputs
+    valid_periods = {"1", "5", "15", "30", "60"}
+    valid_adjusts = {"", "qfq", "hfq"}
+    
+    if period not in valid_periods:
+        raise ValueError(f"Period must be one of {valid_periods}")
+    if adjust not in valid_adjusts:
+        raise ValueError(f"Adjust must be one of {valid_adjusts}")
+        
+    # Fetch data
+    df = ak.stock_zh_a_hist_min_em(
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        period=period,
+        adjust=adjust
+    )
+    
+    # Rename columns based on period
+    if period == "1":
+        column_mappings = {
+            "时间": "timestamp",
+            "开盘": "open",
+            "收盘": "close",
+            "最高": "high",
+            "最低": "low",
+            "成交量": "volume",
+            "成交额": "amount",
+            "均价": "vwap"
+        }
+    else:
+        column_mappings = {
+            "时间": "timestamp",
+            "开盘": "open",
+            "收盘": "close",
+            "最高": "high",
+            "最低": "low",
+            "涨跌幅": "change_pct",
+            "涨跌额": "change",
+            "成交量": "volume",
+            "成交额": "amount",
+            "振幅": "amplitude",
+            "换手率": "turnover"
+        }
+    
+    # Rename columns and convert timestamp
+    df = df.rename(columns=column_mappings)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    
+    return df
+
+def get_daily_data(symbol: str, start_date: str = None, end_date: str = None, 
+                   period: str = 'daily', adjust: str = '') -> pd.DataFrame:
+    """
+    Retrieve daily stock data from East Money (东方财富) with customizable date range.
+    
+    Args:
+        symbol (str): Stock symbol (e.g., '000001' for Ping An Bank)
+        start_date (str, optional): Start date in 'YYYYMMDD' format. 
+            Defaults to 365 days before end_date if None
+        end_date (str, optional): End date in 'YYYYMMDD' format. 
+            Defaults to current date if None
+        period (str, optional): Data frequency. Defaults to 'daily'.
+            Options: {'daily', 'weekly', 'monthly'}
+        adjust (str, optional): Price adjustment method. Defaults to '' (no adjustment).
+            Options: {'': no adjustment, 'qfq': forward adjustment, 'hfq': backward adjustment}
+    
+    Returns:
+        pandas.DataFrame: Stock data with following columns:
+            - date: Trading date
+            - symbol: Stock symbol
+            - open: Opening price
+            - close: Closing price
+            - high: Highest price
+            - low: Lowest price
+            - volume: Trading volume (in lots of 100 shares)
+            - amount: Trading amount (in CNY)
+            - amplitude: Price amplitude (%)
+            - pct_change: Price change percentage (%)
+            - price_change: Price change amount (CNY)
+            - turnover: Turnover rate (%)
+    """
+    import akshare as ak
+    # Handle default end_date
+    if end_date is None:
+        end_date = datetime.now().strftime('%Y%m%d')
+    
+    # Handle default start_date
+    if start_date is None:
+        end_dt = datetime.strptime(end_date, '%Y%m%d')
+        start_dt = end_dt - timedelta(days=365)
+        start_date = start_dt.strftime('%Y%m%d')
+    
+    # Get data from akshare
+    df = ak.stock_zh_a_hist(
+        symbol=symbol,
+        period=period,
+        start_date=start_date,
+        end_date=end_date,
+        adjust=adjust
+    )
+    
+    # Rename columns to English
+    column_mapping = {
+        '日期': 'date',
+        '股票代码': 'symbol',
+        '开盘': 'open',
+        '收盘': 'close',
+        '最高': 'high',
+        '最低': 'low',
+        '成交量': 'volume',
+        '成交额': 'amount',
+        '振幅': 'amplitude',
+        '涨跌幅': 'pct_change',
+        '涨跌额': 'price_change',
+        '换手率': 'turnover'
+    }
+    
+    df = df.rename(columns=column_mapping)
+    
+    return df
 
 def get_last_trading_dates(days: int = 400) -> Tuple[str, str]:
     """
@@ -61,10 +229,15 @@ def get_stock_daily(symbol: str, start_date, end_date) -> pd.DataFrame:
     """
     return tp.fetch_stock_daily_data(symbol, None, start_date, end_date)
 
-
-def get_technical_factor(data: Union[str, pd.DataFrame], windows: Dict[str, list] = None,
-                        start_date: str = None, end_date: str = None,
-                        include_cdl: bool = False,days: Optional[int] = None) -> pd.DataFrame:
+def get_technical_factor(
+    data: Union[str, pd.DataFrame], 
+    windows: Dict[str, list] = None,
+    start_date: str = None, 
+    end_date: str = None,
+    include_cdl: bool = False,
+    days: Optional[int] = None,
+    use_tushare: bool = True
+) -> pd.DataFrame:
     """Calculate various technical indicators for stock data.
     
     Args:
@@ -72,110 +245,13 @@ def get_technical_factor(data: Union[str, pd.DataFrame], windows: Dict[str, list
         windows: Dictionary of lookback periods for different indicators
         start_date: Start date for data retrieval if symbol is provided (format: YYYYMMDD)
         end_date: End date for data retrieval if symbol is provided (format: YYYYMMDD)
+        include_cdl: Whether to include candlestick pattern indicators
+        days: Number of days to look back (alternative to start_date/end_date)
+        use_tushare: Whether to use Tushare data source (True) or East Money data source (False)
     
     Returns:
         DataFrame containing all calculated technical indicators and pattern signals with NA values removed,
         including a 'date' column (renamed from 'trade_date')
-    Engulfing（吞没形态）
-
-
-    由两根蜡烛组成，第二根蜡烛完全"吞没"第一根蜡烛的实体
-    看涨吞没：在下跌趋势中，第二根为阳线且完全吞没前一根阴线
-    看跌吞没：在上涨趋势中，第二根为阴线且完全吞没前一根阳线
-    信号强度：较强，特别是在趋势反转点
-
-
-    Morning Star（晨星形态）
-
-
-    由三根蜡烛组成的底部反转形态
-    第一根是大阴线，第二根是小实体（阴阳皆可），第三根是大阳线
-    第二根与第一、三根之间通常有价格跳空
-    预示着下跌趋势可能结束，适合寻找做多机会
-    信号强度：很强
-
-
-    Evening Star（夜星形态）
-
-
-    与晨星相反的顶部反转形态
-    第一根是大阳线，第二根是小实体，第三根是大阴线
-    预示着上涨趋势可能结束，适合寻找做空机会
-    信号强度：很强
-
-
-    Hammer（锤子线）
-
-
-    单根蜡烛形态，有长下影线，小实体位于上部
-    在下跌趋势末端出现，预示可能反转向上
-    下影线长度通常是实体的2-3倍
-    信号强度：中等，需要后续确认
-
-
-    Hanging Man（上吊线）
-
-
-    形状与锤子线相同，但出现在上涨趋势顶部
-    预示可能反转向下
-    同样需要长下影线和位于上部的小实体
-    信号强度：中等，需要后续确认
-
-
-    Three White Soldiers（三白兵）
-
-
-    连续三根上涨的阳线，每根都收在前一根的高点之上
-    是强势上涨的信号
-    实体最好大致相等，开盘价在前一天实体中部
-    信号强度：强
-
-
-    Three Black Crows（三乌鸦）
-
-
-    与三白兵相反，是连续三根下跌的阴线
-    预示强势下跌
-    每根都开在前一根中部，收在新低点
-    信号强度：强
-
-
-    Three Methods（五法：上升三法或下降三法）
-
-
-    五根蜡烛组成的持续形态
-    上升三法：一根大阳线后是三根小阴线（不破第一根低点），最后一根大阳线创新高
-    下降三法：一根大阴线后是三根小阳线（不破第一根高点），最后一根大阴线创新低
-    信号强度：中等
-
-
-    Marubozu（光头光脚阳/阴线）
-
-
-    没有上下影线的实体
-    阳线代表强势，阴线代表弱势
-    开盘价等于最低价（阳线）或最高价（阴线）
-    收盘价等于最高价（阳线）或最低价（阴线）
-    信号强度：单独出现时中等
-
-
-    Doji（十字线）
-
-
-    开盘价和收盘价相同或极其接近
-    表示市场犹豫不决，可能预示趋势反转
-    在上升趋势顶部更有意义
-    信号强度：弱到中等，需要配合其他指标
-
-
-    Harami（孕线形态）
-
-
-    两根蜡烛组成，第二根完全包含在第一根实体之内
-    看涨孕线：大阴线后跟小阳线
-    看跌孕线：大阳线后跟小阴线
-    预示当前趋势可能减弱
-    信号强度：中等
     """
     # Handle input data
     if isinstance(data, str):
@@ -184,13 +260,12 @@ def get_technical_factor(data: Union[str, pd.DataFrame], windows: Dict[str, list
         
         if days:
             # 获取交易日历以计算start_date
-            start_date,end_date = get_last_trading_dates(days)
-
+            start_date, end_date = get_last_trading_dates(days)
         elif not start_date:
             # 如果既没有指定days也没有指定start_date，使用默认的365+120天
             start_date = (datetime.now() - timedelta(days=365+120)).strftime('%Y%m%d')
             
-        df = get_stock_daily(data, start_date, end_date)
+        df = get_daily_bar(data, start_date, end_date, is_tushare=use_tushare)
     elif isinstance(data, pd.DataFrame):
         df = data.copy()
         if days:
@@ -200,7 +275,7 @@ def get_technical_factor(data: Union[str, pd.DataFrame], windows: Dict[str, list
         raise ValueError("data must be either a stock symbol string or a pandas DataFrame")
 
     # Validate required columns
-    required_columns = ['trade_date', 'open', 'high', 'low', 'close', 'vol']
+    required_columns = ['trade_date', 'open', 'high', 'low', 'close', 'volume']
     if not all(col in df.columns for col in required_columns):
         raise ValueError(f"DataFrame must contain columns: {required_columns}")
 
@@ -231,14 +306,13 @@ def get_technical_factor(data: Union[str, pd.DataFrame], windows: Dict[str, list
     high = df['high']
     low = df['low']
     open_price = df['open']
-    volume = df['vol']
+    volume = df['volume']  # 注意这里不再使用vol
     
     # Initialize DataFrame with original OHLCV data and date
-    result_df = df[['trade_date', 'open', 'high', 'low', 'close', 'vol']].copy()
+    result_df = df[['trade_date', 'open', 'high', 'low', 'close', 'volume']].copy()
     result_df = result_df.rename(columns={'trade_date': 'date'})
     
     # 在初始化result_df后，添加量比计算
-    volume = df['vol']
     # 计算5日平均成交量（不包括当日）
     ma5_volume = volume.shift(1).rolling(window=5).mean()
     # 计算量比
@@ -695,7 +769,7 @@ def get_institutional_research_records(symbol: str, trade_date: str, start_date:
     Args:
         symbol (str): 股票代码
         trade_date (str): 调研日期 YYYYMMDD
-        start_date (str): 开始日期 YYYYMMDD
+        start_date (str): 始日期 YYYYMMDD
         end_date (str): 结束日期 YYYYMMDD
         limit (int): 返回记录数量限制
         
@@ -844,3 +918,756 @@ def get_technical_analysis_factor(symbol,days:int =1):
     df = tp.fetch_stock_technical_factors(symbol,limit=days)   
     df.drop(columns=['ts_code'],inplace=True)
     return df.to_dict(orient='records')
+
+def get_technical_factor_for_minutes_data(
+    data: Union[str, pd.DataFrame],
+    period: str = "1",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    windows: Dict[str, list] = None
+) -> pd.DataFrame:
+    """Calculate technical indicators for minute-level stock data.
+    
+    Args:
+        data: Either a DataFrame with OHLCV data or a stock symbol (e.g., '000001')
+        period: Time period, options: {"1", "5", "15", "30", "60"}
+                Note: 1-min data only available for last 5 trading days
+        start_date: Start datetime in format "YYYY-MM-DD HH:MM:SS" (ignored if period="1")
+        end_date: End datetime in format "YYYY-MM-DD HH:MM:SS" (ignored if period="1")
+        windows: Dictionary of lookback periods for different indicators
+    
+    Returns:
+        DataFrame containing calculated technical indicators with NA values removed
+    """
+    # Handle input data
+    if isinstance(data, str):
+        df = get_minute_data(
+            symbol=data,
+            start_date=None if period == "1" else start_date,
+            end_date=None if period == "1" else end_date,
+            period=period
+        )
+    elif isinstance(data, pd.DataFrame):
+        df = data.copy()
+    else:
+        raise ValueError("data must be either a stock symbol string or a pandas DataFrame")
+
+    # Validate required columns
+    required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    if not all(col in df.columns for col in required_columns):
+        raise ValueError(f"DataFrame must contain columns: {required_columns}")
+
+    # Sort DataFrame by timestamp in ascending order
+    df = df.sort_values('timestamp')
+    df = df.reset_index(drop=True)
+    
+    # Initialize default windows if not provided
+    default_windows = {
+        'sma': [5, 10, 20, 60],
+        'ema': [5, 10, 20, 60],
+        'macd': [12, 26, 9],  # fast, slow, signal
+        'rsi': [6, 12, 24],
+        'stoch': [14, 3, 3],  # k, d, smooth
+        'bbands': [20, 2],    # period, std
+        'atr': [14],
+        'adx': [14],
+        'mfi': [14],
+        'volatility': [10, 20, 30],
+        'tsi': [25, 13],      # long, short
+        'ultimate': [7, 14, 28]  # for Ultimate Oscillator
+    }
+    
+    windows = windows or default_windows
+    
+    # Convert price and volume data to pandas Series
+    close = df['close']
+    high = df['high']
+    low = df['low']
+    open_price = df['open']
+    volume = df['volume']
+    
+    # Initialize result DataFrame
+    result_df = pd.DataFrame()
+    result_df['timestamp'] = df['timestamp']
+    result_df['open'] = open_price
+    result_df['high'] = high
+    result_df['low'] = low
+    result_df['close'] = close
+    result_df['volume'] = volume
+    
+    # Calculate volume ratio (only for period="1")
+    if period == "1" and 'vwap' in df.columns:
+        result_df['vwap'] = df['vwap']
+    elif period != "1" and 'change_pct' in df.columns:
+        result_df['change_pct'] = df['change_pct']
+        result_df['change'] = df['change']
+        result_df['amplitude'] = df['amplitude']
+        result_df['turnover'] = df['turnover']
+    
+    # Calculate Moving Averages
+    for period in windows['sma']:
+        result_df[f'sma_{period}'] = ta.SMA(close, timeperiod=period)
+        
+    for period in windows['ema']:
+        result_df[f'ema_{period}'] = ta.EMA(close, timeperiod=period)
+    
+    # MACD
+    fast, slow, signal = windows['macd']
+    macd, macd_signal, macd_hist = ta.MACD(close, 
+                                          fastperiod=fast,
+                                          slowperiod=slow, 
+                                          signalperiod=signal)
+    result_df['macd'] = macd
+    result_df['macd_signal'] = macd_signal
+    result_df['macd_hist'] = macd_hist
+    
+    # RSI
+    for period in windows['rsi']:
+        result_df[f'rsi_{period}'] = ta.RSI(close, timeperiod=period)
+    
+    # Stochastic
+    k_period, d_period, smooth = windows['stoch']
+    slowk, slowd = ta.STOCH(high, low, close,
+                           fastk_period=k_period,
+                           slowk_period=d_period,
+                           slowk_matype=0,
+                           slowd_period=smooth,
+                           slowd_matype=0)
+    result_df['stoch_k'] = slowk
+    result_df['stoch_d'] = slowd
+    
+    # Bollinger Bands
+    period, std = windows['bbands']
+    upperband, middleband, lowerband = ta.BBANDS(close,
+                                                timeperiod=period,
+                                                nbdevup=std,
+                                                nbdevdn=std,
+                                                matype=0)
+    result_df['bb_upper'] = upperband
+    result_df['bb_middle'] = middleband
+    result_df['bb_lower'] = lowerband
+    result_df['bb_width'] = (upperband - lowerband) / middleband
+    
+    # Additional indicators
+    result_df['roc'] = ta.ROC(close, timeperiod=10)
+    result_df['cci'] = ta.CCI(high, low, close, timeperiod=14)
+    result_df['willr'] = ta.WILLR(high, low, close, timeperiod=14)
+    result_df['obv'] = ta.OBV(close, volume)
+    
+    # Drop rows containing NA values and sort by timestamp in descending order
+    result_df = result_df.dropna()
+    result_df = result_df.sort_values('timestamp', ascending=False).reset_index(drop=True)
+    
+    return result_df
+
+def get_cdl_factor(
+    data: Union[str, pd.DataFrame],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    days: Optional[int] = None
+) -> pd.DataFrame:
+    """Calculate candlestick pattern indicators for daily stock data.
+    
+    Args:
+        data: Either a DataFrame with OHLCV data or a stock symbol (e.g., '000001')
+        start_date: Start date in format "YYYYMMDD" (default: 365 days ago)
+        end_date: End date in format "YYYYMMDD" (default: today)
+        days: Number of days to look back (alternative to start_date/end_date)
+    
+    Returns:
+        DataFrame containing candlestick pattern signals with NA values removed.
+        Pattern values: 
+        - 100: Strong bullish signal
+        - 50: Weak bullish signal
+        - 0: No pattern
+        - -50: Weak bearish signal
+        - -100: Strong bearish signal
+    """
+    # Handle input data
+    if isinstance(data, str):
+        if not end_date:
+            end_date = datetime.now().strftime('%Y%m%d')
+        
+        if days:
+            # 获取交易日历以计算start_date
+            start_date, end_date = get_last_trading_dates(days)
+        elif not start_date:
+            # 如果既没有指定days也没有指定start_date，使用默认的365天
+            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
+            
+        df = get_stock_daily(data, start_date, end_date)
+    elif isinstance(data, pd.DataFrame):
+        df = data.copy()
+        if days:
+            # 如果提供了DataFrame并指定了days，只取最近的days行
+            df = df.head(days)
+    else:
+        raise ValueError("data must be either a stock symbol string or a pandas DataFrame")
+
+    # Validate required columns
+    required_columns = ['trade_date', 'open', 'high', 'low', 'close']
+    if not all(col in df.columns for col in required_columns):
+        raise ValueError(f"DataFrame must contain columns: {required_columns}")
+
+    # Sort DataFrame by date in ascending order for calculation
+    df = df.sort_values('trade_date')
+    df = df.reset_index(drop=True)
+    
+    # Extract OHLC data
+    open_price = df['open']
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    # Initialize result DataFrame with timestamp
+    result_df = pd.DataFrame()
+    result_df['timestamp'] = pd.to_datetime(df['trade_date'])  # Convert trade_date to timestamp
+    
+    # Dictionary of all available candlestick pattern functions in talib
+    pattern_functions = {
+        'CDL2CROWS': ta.CDL2CROWS,
+        'CDL3BLACKCROWS': ta.CDL3BLACKCROWS,
+        'CDL3INSIDE': ta.CDL3INSIDE,
+        'CDL3LINESTRIKE': ta.CDL3LINESTRIKE,
+        'CDL3OUTSIDE': ta.CDL3OUTSIDE,
+        'CDL3STARSINSOUTH': ta.CDL3STARSINSOUTH,
+        'CDL3WHITESOLDIERS': ta.CDL3WHITESOLDIERS,
+        'CDLABANDONEDBABY': lambda o, h, l, c: ta.CDLABANDONEDBABY(o, h, l, c, penetration=0),
+        'CDLADVANCEBLOCK': ta.CDLADVANCEBLOCK,
+        'CDLBELTHOLD': ta.CDLBELTHOLD,
+        'CDLBREAKAWAY': ta.CDLBREAKAWAY,
+        'CDLCLOSINGMARUBOZU': ta.CDLCLOSINGMARUBOZU,
+        'CDLCONCEALBABYSWALL': ta.CDLCONCEALBABYSWALL,
+        'CDLCOUNTERATTACK': ta.CDLCOUNTERATTACK,
+        'CDLDARKCLOUDCOVER': lambda o, h, l, c: ta.CDLDARKCLOUDCOVER(o, h, l, c, penetration=0),
+        'CDLDOJI': ta.CDLDOJI,
+        'CDLDOJISTAR': ta.CDLDOJISTAR,
+        'CDLDRAGONFLYDOJI': ta.CDLDRAGONFLYDOJI,
+        'CDLENGULFING': ta.CDLENGULFING,
+        'CDLEVENINGDOJISTAR': lambda o, h, l, c: ta.CDLEVENINGDOJISTAR(o, h, l, c, penetration=0),
+        'CDLEVENINGSTAR': lambda o, h, l, c: ta.CDLEVENINGSTAR(o, h, l, c, penetration=0),
+        'CDLGAPSIDESIDEWHITE': ta.CDLGAPSIDESIDEWHITE,
+        'CDLGRAVESTONEDOJI': ta.CDLGRAVESTONEDOJI,
+        'CDLHAMMER': ta.CDLHAMMER,
+        'CDLHANGINGMAN': ta.CDLHANGINGMAN,
+        'CDLHARAMI': ta.CDLHARAMI,
+        'CDLHARAMICROSS': ta.CDLHARAMICROSS,
+        'CDLHIGHWAVE': ta.CDLHIGHWAVE,
+        'CDLHIKKAKE': ta.CDLHIKKAKE,
+        'CDLHIKKAKEMOD': ta.CDLHIKKAKEMOD,
+        'CDLHOMINGPIGEON': ta.CDLHOMINGPIGEON,
+        'CDLIDENTICAL3CROWS': ta.CDLIDENTICAL3CROWS,
+        'CDLINNECK': ta.CDLINNECK,
+        'CDLINVERTEDHAMMER': ta.CDLINVERTEDHAMMER,
+        'CDLKICKING': ta.CDLKICKING,
+        'CDLKICKINGBYLENGTH': ta.CDLKICKINGBYLENGTH,
+        'CDLLADDERBOTTOM': ta.CDLLADDERBOTTOM,
+        'CDLLONGLEGGEDDOJI': ta.CDLLONGLEGGEDDOJI,
+        'CDLLONGLINE': ta.CDLLONGLINE,
+        'CDLMARUBOZU': ta.CDLMARUBOZU,
+        'CDLMATCHINGLOW': ta.CDLMATCHINGLOW,
+        'CDLMATHOLD': lambda o, h, l, c: ta.CDLMATHOLD(o, h, l, c, penetration=0),
+        'CDLMORNINGDOJISTAR': lambda o, h, l, c: ta.CDLMORNINGDOJISTAR(o, h, l, c, penetration=0),
+        'CDLMORNINGSTAR': lambda o, h, l, c: ta.CDLMORNINGSTAR(o, h, l, c, penetration=0),
+        'CDLONNECK': ta.CDLONNECK,
+        'CDLPIERCING': ta.CDLPIERCING,
+        'CDLRICKSHAWMAN': ta.CDLRICKSHAWMAN,
+        'CDLRISEFALL3METHODS': ta.CDLRISEFALL3METHODS,
+        'CDLSEPARATINGLINES': ta.CDLSEPARATINGLINES,
+        'CDLSHOOTINGSTAR': ta.CDLSHOOTINGSTAR,
+        'CDLSHORTLINE': ta.CDLSHORTLINE,
+        'CDLSPINNINGTOP': ta.CDLSPINNINGTOP,
+        'CDLSTALLEDPATTERN': ta.CDLSTALLEDPATTERN,
+        'CDLSTICKSANDWICH': ta.CDLSTICKSANDWICH,
+        'CDLTAKURI': ta.CDLTAKURI,
+        'CDLTASUKIGAP': ta.CDLTASUKIGAP,
+        'CDLTHRUSTING': ta.CDLTHRUSTING,
+        'CDLTRISTAR': ta.CDLTRISTAR,
+        'CDLUNIQUE3RIVER': ta.CDLUNIQUE3RIVER,
+        'CDLUPSIDEGAP2CROWS': ta.CDLUPSIDEGAP2CROWS,
+        'CDLXSIDEGAP3METHODS': ta.CDLXSIDEGAP3METHODS
+    }
+    
+    # Calculate all pattern signals
+    for pattern_name, pattern_func in pattern_functions.items():
+        try:
+            result_df[pattern_name] = pattern_func(open_price, high, low, close)
+        except Exception as e:
+            print(f"Warning: Failed to calculate {pattern_name}: {str(e)}")
+            continue
+    
+    # Add basic price data
+    result_df['open'] = open_price
+    result_df['high'] = high
+    result_df['low'] = low
+    result_df['close'] = close
+    
+    # Add additional columns if available
+    if 'vol' in df.columns:
+        result_df['volume'] = df['vol']
+    if 'amount' in df.columns:
+        result_df['amount'] = df['amount']
+    if 'pct_chg' in df.columns:
+        result_df['change_pct'] = df['pct_chg']
+    if 'change' in df.columns:
+        result_df['change'] = df['change']
+    
+    # Drop rows containing NA values and sort by timestamp in descending order
+    result_df = result_df.dropna()
+    result_df = result_df.sort_values('timestamp', ascending=False).reset_index(drop=True)
+    
+    # Add a summary column counting total bullish and bearish signals
+    pattern_columns = [col for col in result_df.columns if col.startswith('CDL')]
+    if pattern_columns:
+        result_df['bullish_patterns'] = (result_df[pattern_columns] > 0).sum(axis=1)
+        result_df['bearish_patterns'] = (result_df[pattern_columns] < 0).sum(axis=1)
+        result_df['pattern_score'] = result_df[pattern_columns].sum(axis=1)
+    
+    return result_df
+
+def get_cdl_factor_for_minute_data(
+    data: Union[str, pd.DataFrame],
+    period: str = "1",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> pd.DataFrame:
+    """Calculate candlestick pattern indicators for minute-level stock data.
+    
+    Args:
+        data: Either a DataFrame with OHLCV data or a stock symbol (e.g., '000001')
+        period: Time period, options: {"1", "5", "15", "30", "60"}
+                Note: 1-min data only available for last 5 trading days
+        start_date: Start datetime in format "YYYY-MM-DD HH:MM:SS" (ignored if period="1")
+        end_date: End datetime in format "YYYY-MM-DD HH:MM:SS" (ignored if period="1")
+    
+    Returns:
+        DataFrame containing candlestick pattern signals with NA values removed.
+        Pattern values: 
+        - 100: Strong bullish signal
+        - 50: Weak bullish signal
+        - 0: No pattern
+        - -50: Weak bearish signal
+        - -100: Strong bearish signal
+    """
+    # Handle input data
+    if isinstance(data, str):
+        df = get_minute_data(
+            symbol=data,
+            start_date=None if period == "1" else start_date,
+            end_date=None if period == "1" else end_date,
+            period=period
+        )
+    elif isinstance(data, pd.DataFrame):
+        df = data.copy()
+    else:
+        raise ValueError("data must be either a stock symbol string or a pandas DataFrame")
+
+    # Validate required columns
+    required_columns = ['timestamp', 'open', 'high', 'low', 'close']
+    if not all(col in df.columns for col in required_columns):
+        raise ValueError(f"DataFrame must contain columns: {required_columns}")
+
+    # Sort DataFrame by timestamp in ascending order
+    df = df.sort_values('timestamp')
+    df = df.reset_index(drop=True)
+    
+    # Extract OHLC data
+    open_price = df['open']
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    # Initialize result DataFrame with timestamp
+    result_df = pd.DataFrame()
+    result_df['timestamp'] = df['timestamp']
+    
+    # Dictionary of all available candlestick pattern functions in talib
+    pattern_functions = {
+        'CDL2CROWS': ta.CDL2CROWS,
+        'CDL3BLACKCROWS': ta.CDL3BLACKCROWS,
+        'CDL3INSIDE': ta.CDL3INSIDE,
+        'CDL3LINESTRIKE': ta.CDL3LINESTRIKE,
+        'CDL3OUTSIDE': ta.CDL3OUTSIDE,
+        'CDL3STARSINSOUTH': ta.CDL3STARSINSOUTH,
+        'CDL3WHITESOLDIERS': ta.CDL3WHITESOLDIERS,
+        'CDLABANDONEDBABY': lambda o, h, l, c: ta.CDLABANDONEDBABY(o, h, l, c, penetration=0),
+        'CDLADVANCEBLOCK': ta.CDLADVANCEBLOCK,
+        'CDLBELTHOLD': ta.CDLBELTHOLD,
+        'CDLBREAKAWAY': ta.CDLBREAKAWAY,
+        'CDLCLOSINGMARUBOZU': ta.CDLCLOSINGMARUBOZU,
+        'CDLCONCEALBABYSWALL': ta.CDLCONCEALBABYSWALL,
+        'CDLCOUNTERATTACK': ta.CDLCOUNTERATTACK,
+        'CDLDARKCLOUDCOVER': lambda o, h, l, c: ta.CDLDARKCLOUDCOVER(o, h, l, c, penetration=0),
+        'CDLDOJI': ta.CDLDOJI,
+        'CDLDOJISTAR': ta.CDLDOJISTAR,
+        'CDLDRAGONFLYDOJI': ta.CDLDRAGONFLYDOJI,
+        'CDLENGULFING': ta.CDLENGULFING,
+        'CDLEVENINGDOJISTAR': lambda o, h, l, c: ta.CDLEVENINGDOJISTAR(o, h, l, c, penetration=0),
+        'CDLEVENINGSTAR': lambda o, h, l, c: ta.CDLEVENINGSTAR(o, h, l, c, penetration=0),
+        'CDLGAPSIDESIDEWHITE': ta.CDLGAPSIDESIDEWHITE,
+        'CDLGRAVESTONEDOJI': ta.CDLGRAVESTONEDOJI,
+        'CDLHAMMER': ta.CDLHAMMER,
+        'CDLHANGINGMAN': ta.CDLHANGINGMAN,
+        'CDLHARAMI': ta.CDLHARAMI,
+        'CDLHARAMICROSS': ta.CDLHARAMICROSS,
+        'CDLHIGHWAVE': ta.CDLHIGHWAVE,
+        'CDLHIKKAKE': ta.CDLHIKKAKE,
+        'CDLHIKKAKEMOD': ta.CDLHIKKAKEMOD,
+        'CDLHOMINGPIGEON': ta.CDLHOMINGPIGEON,
+        'CDLIDENTICAL3CROWS': ta.CDLIDENTICAL3CROWS,
+        'CDLINNECK': ta.CDLINNECK,
+        'CDLINVERTEDHAMMER': ta.CDLINVERTEDHAMMER,
+        'CDLKICKING': ta.CDLKICKING,
+        'CDLKICKINGBYLENGTH': ta.CDLKICKINGBYLENGTH,
+        'CDLLADDERBOTTOM': ta.CDLLADDERBOTTOM,
+        'CDLLONGLEGGEDDOJI': ta.CDLLONGLEGGEDDOJI,
+        'CDLLONGLINE': ta.CDLLONGLINE,
+        'CDLMARUBOZU': ta.CDLMARUBOZU,
+        'CDLMATCHINGLOW': ta.CDLMATCHINGLOW,
+        'CDLMATHOLD': lambda o, h, l, c: ta.CDLMATHOLD(o, h, l, c, penetration=0),
+        'CDLMORNINGDOJISTAR': lambda o, h, l, c: ta.CDLMORNINGDOJISTAR(o, h, l, c, penetration=0),
+        'CDLMORNINGSTAR': lambda o, h, l, c: ta.CDLMORNINGSTAR(o, h, l, c, penetration=0),
+        'CDLONNECK': ta.CDLONNECK,
+        'CDLPIERCING': ta.CDLPIERCING,
+        'CDLRICKSHAWMAN': ta.CDLRICKSHAWMAN,
+        'CDLRISEFALL3METHODS': ta.CDLRISEFALL3METHODS,
+        'CDLSEPARATINGLINES': ta.CDLSEPARATINGLINES,
+        'CDLSHOOTINGSTAR': ta.CDLSHOOTINGSTAR,
+        'CDLSHORTLINE': ta.CDLSHORTLINE,
+        'CDLSPINNINGTOP': ta.CDLSPINNINGTOP,
+        'CDLSTALLEDPATTERN': ta.CDLSTALLEDPATTERN,
+        'CDLSTICKSANDWICH': ta.CDLSTICKSANDWICH,
+        'CDLTAKURI': ta.CDLTAKURI,
+        'CDLTASUKIGAP': ta.CDLTASUKIGAP,
+        'CDLTHRUSTING': ta.CDLTHRUSTING,
+        'CDLTRISTAR': ta.CDLTRISTAR,
+        'CDLUNIQUE3RIVER': ta.CDLUNIQUE3RIVER,
+        'CDLUPSIDEGAP2CROWS': ta.CDLUPSIDEGAP2CROWS,
+        'CDLXSIDEGAP3METHODS': ta.CDLXSIDEGAP3METHODS
+    }
+    
+    # Calculate all pattern signals
+    for pattern_name, pattern_func in pattern_functions.items():
+        try:
+            result_df[pattern_name] = pattern_func(open_price, high, low, close)
+        except Exception as e:
+            print(f"Warning: Failed to calculate {pattern_name}: {str(e)}")
+            continue
+    
+    # Add basic price data
+    result_df['open'] = open_price
+    result_df['high'] = high
+    result_df['low'] = low
+    result_df['close'] = close
+    
+    # Add period-specific columns
+    if period == "1" and 'vwap' in df.columns:
+        result_df['vwap'] = df['vwap']
+    elif period != "1" and 'change_pct' in df.columns:
+        result_df['change_pct'] = df['change_pct']
+        result_df['change'] = df['change']
+        result_df['amplitude'] = df['amplitude']
+        result_df['turnover'] = df['turnover']
+    
+    # Drop rows containing NA values and sort by timestamp in descending order
+    result_df = result_df.dropna()
+    result_df = result_df.sort_values('timestamp', ascending=False).reset_index(drop=True)
+    
+    # Add a summary column counting total bullish and bearish signals
+    pattern_columns = [col for col in result_df.columns if col.startswith('CDL')]
+    if pattern_columns:
+        result_df['bullish_patterns'] = (result_df[pattern_columns] > 0).sum(axis=1)
+        result_df['bearish_patterns'] = (result_df[pattern_columns] < 0).sum(axis=1)
+        result_df['pattern_score'] = result_df[pattern_columns].sum(axis=1)
+    
+    return result_df
+
+def translate_cdl_columns_to_chinese(df: pd.DataFrame) -> pd.DataFrame:
+    """将K线形态分析结果的列名转换为中文。
+    
+    Args:
+        df: get_cdl_factor_for_minute_data 函数返回的DataFrame
+        
+    Returns:
+        转换后的DataFrame，包含中文列名
+   Engulfing（吞没形态）
+
+
+    由两根蜡烛组成，第二根蜡烛完全"吞没"第一根蜡烛的实体
+    看涨吞没：在下跌趋势中，第二根为阳线且完全吞没前一根阴线
+    看跌吞没：在上涨趋势中，第二根为阴线且完全吞没前一根阳线
+    信号强度：较强，特别是在趋势反转点
+
+
+    Morning Star（晨星形态）
+
+
+    由三根蜡烛组成的底部反转形态
+    第一根是大阴线，第二根是小实体（阴阳皆可），第三根是大阳线
+    第二根与第一、三根之间通常有价格跳空
+    预示着下跌趋势可能结束，适合寻找做多机会
+    信号强度：很强
+
+
+    Evening Star（夜星形态）
+
+
+    与晨星相反的顶部反转形态
+    第一根是大阳线，第二根是小实体，第三根是大阴线
+    预示着上涨趋势可能结束，适合寻找做空机会
+    信号强度：很强
+
+
+    Hammer（锤子线）
+
+
+    单根蜡烛形态，有长下影线，小实体位于上部
+    在下跌趋势末端出现，预示可能反转向上
+    下影线长度通常是实体的2-3倍
+    信号强度：中等，需要后续确认
+
+
+    Hanging Man（上吊线）
+
+
+    形状与锤子线相同，但出现在上涨趋势顶部
+    预示可能反转向下
+    同样需要长下影线和位于上部的小实体
+    信号强度：中等，需要后续确认
+
+
+    Three White Soldiers（三白兵）
+
+
+    连续三根上涨的阳线，每根都收在前一根的高点之上
+    是强势上涨的信号
+    实体最好大致相等，开盘价在前一天实体中部
+    信号强度：强
+
+
+    Three Black Crows（三乌鸦）
+
+
+    与三白兵相反，是连续三根下跌的阴线
+    预示强势下跌
+    每根都开在前一根中部，收在新低点
+    信号强度：强
+
+
+    Three Methods（五法：上升三法或下降三法）
+
+
+    五根蜡烛组成的持续形态
+    上升三法：一根大阳线后是三根小阴线（不破第一根低点），最后一根大阳线创新高
+    下降三法：一根大阴线后是三根小阳线（不破第一根高点），最后一根大阴线创新低
+    信号强度：中等
+
+
+    Marubozu（光头光脚阳/阴线）
+
+
+    没有上下影线的实体
+    阳线代表强势，阴线代表弱势
+    开盘价等于最低价（阳线）或最高价（阴线）
+    收盘价等于最高价（阳线）或最低价（阴线）
+    信号强度：单独出现时中等
+
+
+    Doji（十字线）
+
+
+    开盘价和收盘价相同或极其接近
+    表示市场犹豫不决，可能预示趋势反转
+    在上升趋势顶部更有意义
+    信号强度：弱到中等，需要配合其他指标
+
+
+    Harami（孕线形态）
+
+
+    两根蜡烛组成，第二根完全包含在第一根实体之内
+    看涨孕线：大阴线后跟小阳线
+    看跌孕线：大阳线后跟小阴线
+    预示当前趋势可能减弱
+    信号强度：中等
+    """
+    # 基础列名映射
+    basic_columns = {
+        'timestamp': '时间戳',
+        'open': '开盘价',
+        'high': '最高价',
+        'low': '最低价',
+        'close': '收盘价',
+        'vwap': '成交量加权平均价',
+        'change_pct': '涨跌幅',
+        'change': '涨跌额',
+        'amplitude': '振幅',
+        'turnover': '换手率',
+        'bullish_patterns': '看涨形态数量',
+        'bearish_patterns': '看跌形态数量',
+        'pattern_score': '形态得分'
+    }
+    
+    # K线形态中文名称映射
+    pattern_columns = {
+        'CDL2CROWS': '两只乌鸦',
+        'CDL3BLACKCROWS': '三只乌鸦',
+        'CDL3INSIDE': '三内部上涨和下跌',
+        'CDL3LINESTRIKE': '三线打击',
+        'CDL3OUTSIDE': '三外部上涨和下跌',
+        'CDL3STARSINSOUTH': '南方三星',
+        'CDL3WHITESOLDIERS': '三白兵',
+        'CDLABANDONEDBABY': '弃婴',
+        'CDLADVANCEBLOCK': '大敌当前',
+        'CDLBELTHOLD': '捉腰带线',
+        'CDLBREAKAWAY': '脱离',
+        'CDLCLOSINGMARUBOZU': '收盘缺影线',
+        'CDLCONCEALBABYSWALL': '藏婴吞没',
+        'CDLCOUNTERATTACK': '反击线',
+        'CDLDARKCLOUDCOVER': '乌云压顶',
+        'CDLDOJI': '十字',
+        'CDLDOJISTAR': '十字星',
+        'CDLDRAGONFLYDOJI': '蜻蜓十字',
+        'CDLENGULFING': '吞没模式',
+        'CDLEVENINGDOJISTAR': '十字暮星',
+        'CDLEVENINGSTAR': '暮星',
+        'CDLGAPSIDESIDEWHITE': '向上/下跳空并列阳线',
+        'CDLGRAVESTONEDOJI': '墓碑十字',
+        'CDLHAMMER': '锤头',
+        'CDLHANGINGMAN': '上吊线',
+        'CDLHARAMI': '母子线',
+        'CDLHARAMICROSS': '十字孕线',
+        'CDLHIGHWAVE': '风高浪大线',
+        'CDLHIKKAKE': '陷阱',
+        'CDLHIKKAKEMOD': '修正陷阱',
+        'CDLHOMINGPIGEON': '家鸽',
+        'CDLIDENTICAL3CROWS': '三胞胎乌鸦',
+        'CDLINNECK': '颈内线',
+        'CDLINVERTEDHAMMER': '倒锤头',
+        'CDLKICKING': '反冲形态',
+        'CDLKICKINGBYLENGTH': '由较长缺影线决定的反冲形态',
+        'CDLLADDERBOTTOM': '梯底',
+        'CDLLONGLEGGEDDOJI': '长脚十字',
+        'CDLLONGLINE': '长蜡烛',
+        'CDLMARUBOZU': '光头光脚/缺影线',
+        'CDLMATCHINGLOW': '相同低价',
+        'CDLMATHOLD': '铺垫',
+        'CDLMORNINGDOJISTAR': '十字晨星',
+        'CDLMORNINGSTAR': '晨星',
+        'CDLONNECK': '颈上线',
+        'CDLPIERCING': '刺透形态',
+        'CDLRICKSHAWMAN': '黄包车夫',
+        'CDLRISEFALL3METHODS': '三法上涨和下跌',
+        'CDLSEPARATINGLINES': '分离线',
+        'CDLSHOOTINGSTAR': '射击之星',
+        'CDLSHORTLINE': '短蜡烛',
+        'CDLSPINNINGTOP': '纺锤',
+        'CDLSTALLEDPATTERN': '停顿形态',
+        'CDLSTICKSANDWICH': '条形三明治',
+        'CDLTAKURI': '探水竿',
+        'CDLTASUKIGAP': '跳空并列阴阳线',
+        'CDLTHRUSTING': '插入',
+        'CDLTRISTAR': '三星',
+        'CDLUNIQUE3RIVER': '奇特三河床',
+        'CDLUPSIDEGAP2CROWS': '向上跳空的两只乌鸦',
+        'CDLXSIDEGAP3METHODS': '上升/下降跳空三法'
+    }
+    
+    # 合并所有列名映射
+    all_columns = {**basic_columns, **pattern_columns}
+    
+    # 创建新的DataFrame，仅包含存在的列
+    result_df = pd.DataFrame()
+    for eng_col, ch_col in all_columns.items():
+        if eng_col in df.columns:
+            result_df[ch_col] = df[eng_col]
+    
+    return result_df
+
+def get_daily_bar(
+    symbol: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    is_tushare: bool = True
+) -> pd.DataFrame:
+    """获取股票日线数据，支持通过股票代码或名称查询。
+    
+    Args:
+        symbol (str): 股票代码或名称，例如：'000001'、'平安银行'、'000001.SZ'
+        start_date (str, optional): 开始日期，格式为'YYYYMMDD'，默认为end_date往前365天
+        end_date (str, optional): 结束日期，格式为'YYYYMMDD'，默认为当天
+        is_tushare (bool): 是否使用Tushare数据源，默认True
+            - True: 使用Tushare数据源(get_stock_daily)
+            - False: 使用东方财富数据源(get_daily_data)
+    
+    Returns:
+        pd.DataFrame: 统一格式的日线数据，包含以下列：
+            - trade_date: 交易日期 (YYYYMMDD)
+            - open: 开盘价
+            - high: 最高价
+            - low: 最低价
+            - close: 收盘价
+            - volume: 成交量(手)
+            - amount: 成交额(元)
+            - change: 涨跌额
+            - pct_chg: 涨跌幅(%)
+            
+        数据按照trade_date降序排列，即最新日期在最前面
+    
+    Examples:
+        >>> # 使用股票代码查询
+        >>> df = get_daily_bar('000001')
+        >>> # 使用股票名称查询
+        >>> df = get_daily_bar('平安银行')
+        >>> # 指定日期范围
+        >>> df = get_daily_bar('000001', '20230101', '20231231')
+        >>> # 使用东方财富数据源
+        >>> df = get_daily_bar('000001', is_tushare=False)
+    """
+    # 处理默认日期
+    if end_date is None:
+        end_date = datetime.now().strftime('%Y%m%d')
+    if start_date is None:
+        start_dt = datetime.strptime(end_date, '%Y%m%d') - timedelta(days=365)
+        start_date = start_dt.strftime('%Y%m%d')
+    
+    if is_tushare:
+        # 使用Tushare数据源，get_stock_daily内部会处理代码转换
+        df = get_stock_daily(symbol, start_date, end_date)
+        
+        # 选择和重命名需要的列
+        df = df[['trade_date', 'open', 'high', 'low', 'close', 
+                'vol', 'amount', 'change', 'pct_chg']]
+        df = df.rename(columns={'vol': 'volume'})
+        
+    else:
+        # 使用东方财富数据源，需要手动处理代码转换
+        matcher = TsCodeMatcher()
+        # 获取不带后缀的代码
+        pure_symbol = matcher[symbol].split('.')[0]
+        
+        df = get_daily_data(pure_symbol, start_date, end_date)
+        
+        # 统一列名格式
+        df = df.rename(columns={
+            'date': 'trade_date',
+            'pct_change': 'pct_chg',
+            'price_change': 'change'
+        })
+        
+        # 选择需要的列
+        df = df[['trade_date', 'open', 'high', 'low', 'close', 
+                'volume', 'amount', 'change', 'pct_chg']]
+        
+        # 确保trade_date格式统一为YYYYMMDD
+        df['trade_date'] = pd.to_datetime(df['trade_date']).dt.strftime('%Y%m%d')
+    
+    # 统一数据类型
+    numeric_columns = ['open', 'high', 'low', 'close', 'volume', 
+                      'amount', 'change', 'pct_chg']
+    df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors='coerce')
+    
+    # 按日期降序排序
+    df = df.sort_values('trade_date', ascending=False).reset_index(drop=True)
+    
+    return df
