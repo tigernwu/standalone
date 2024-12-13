@@ -26,7 +26,6 @@ tenacity
 pdfplumber
 python-docx
 python-Levenshtein
-TA-Lib
 optuna
 catboost
 arch
@@ -39,3 +38,4 @@ ratelimit
 skfolio
 PyPortfolioOpt
 riskfolio-lib
+TA-Lib
