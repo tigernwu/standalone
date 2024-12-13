@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,7 @@ from core.utils.function_cache import FunctionCache
 function_cache = FunctionCache()
 import talib as ta
 from core.stock.ts_code_matcher import TsCodeMatcher
+from core.utils.log import logger
 
 analyze_cache=FunctionCache("./data/analyze_single_stock_cache.db")
 
@@ -236,7 +237,7 @@ def get_technical_factor(
     end_date: str = None,
     include_cdl: bool = False,
     days: Optional[int] = None,
-    use_tushare: bool = True
+    use_tushare: bool = False
 ) -> pd.DataFrame:
     """Calculate various technical indicators for stock data.
     
@@ -1671,3 +1672,99 @@ def get_daily_bar(
     df = df.sort_values('trade_date', ascending=False).reset_index(drop=True)
     
     return df
+
+
+@function_cache.cache(ttl=60)
+def get_stock_fund_flow( indicator: Literal[ "即时", "3日排行", "5日排行", "10日排行", "20日排行"]="即时") -> Dict[str, Dict]:
+        """
+        获取个股资金流量表，参数 indicator: Literal[ "即时", "3日排行", "5日排行", "10日排行", "20日排行"]="即时" 返回值 Dict[str, Dict]
+        """
+        # 获取资金流数据
+        stock_fund_flow_individual_df = ak.stock_fund_flow_individual(symbol=indicator)
+        
+        # 将DataFrame转换为字典
+        result = {}
+        for _, row in stock_fund_flow_individual_df.iterrows():
+            stock_code = row['股票代码']
+            row_dict = row.to_dict()
+            result[stock_code] = row_dict
+        
+        return result
+
+@function_cache.cache(ttl=60)
+def get_top_flow_concept( indicator: Literal["即时", "3日排行", "5日排行", "10日排行", "20日排行"]="即时", topn: int=20) -> List[Dict]:
+    """
+    获取概念资金流量表，带有顺序重试机制
+    
+    Args:
+        indicator: 时间周期，默认"即时"
+        topn: 返回前多少条数据，默认20
+        
+    Returns:
+        List[Dict]: 概念资金流数据列表
+    """
+    # 定义重试顺序
+    retry_sequence = ["即时", "3日排行", "5日排行", "10日排行", "20日排行"]
+    
+    # 如果指定的indicator不是"即时"，将重试序列重新排序，从指定的indicator开始
+    if indicator != "即时":
+        try:
+            start_index = retry_sequence.index(indicator)
+            retry_sequence = retry_sequence[start_index:] + retry_sequence[:start_index]
+        except ValueError:
+            logger.warning(f"无效的indicator值: {indicator}，使用默认顺序")
+    
+    last_exception = None
+    
+    # 按顺序尝试每个周期
+    for period in retry_sequence:
+        try:
+            df = ak.stock_fund_flow_concept(symbol=period)
+            if not df.empty:
+                result = df.head(topn).to_dict(orient="records")
+                if result:  # 确保结果不为空
+                    if period != indicator:
+                        logger.info(f"使用备选周期 {period} 获取数据成功")
+                    return result
+        except Exception as e:
+            last_exception = e
+            logger.warning(f"获取 {period} 周期数据失败: {str(e)}")
+            continue
+    
+    # 如果所有尝试都失败了
+    error_msg = f"所有周期都获取失败，最后一次错误: {str(last_exception)}" if last_exception else "所有周期都获取失败"
+    logger.error(error_msg)
+    return []  # 返回空列表而不是抛出异常，保证服务的稳定性
+
+@function_cache.cache(ttl=60)
+def get_stock_fund_flow_concept(indicator: Literal["即时", "3日排行", "5日排行", "10日排行", "20日排行"]="即时") -> Dict[str, Dict]:
+    """
+    获取概念资金流量表，参数 indicator: Literal[ "即时", "3日排行", "5日排行", "10日排行", "20日排行"]="即时" 返回值 Dict[str, Dict]
+    """
+    stock_fund_flow_concept_df = ak.stock_fund_flow_concept(symbol=indicator)
+    result = {}
+    for _, row in stock_fund_flow_concept_df.iterrows():
+        stock_code = row['行业']
+        row_dict = row.to_dict()
+        result[stock_code] = row_dict
+    
+    return result
+
+@function_cache.cache(ttl=60)
+def get_industry_fund_flow(indicator: Literal["即时", "3日排行", "5日排行", "10日排行", "20日排行"]="即时") -> Dict[str, Dict]:
+    """
+    获取行业资金流量表，参数 indicator: Literal[ "即时", "3日排行", "5日排行", "10日排行", "20日排行"]="即时" 返回值 Dict[str, Dict]
+    """
+    # 获取行业资金流数据
+    stock_fund_flow_industry_df = ak.stock_fund_flow_industry(symbol=indicator)
+    if stock_fund_flow_industry_df is None or stock_fund_flow_industry_df.empty or len(stock_fund_flow_industry_df.columns) == 0:
+        stock_fund_flow_industry_df = ak.stock_sector_fund_flow_rank(indicator="3日排行")
+    
+    # 将DataFrame转换为字典
+    result = {}
+    for _, row in stock_fund_flow_industry_df.iterrows():
+        industry = row['行业']
+        row_dict = row.to_dict()
+        result[industry] = row_dict
+    
+    return result
