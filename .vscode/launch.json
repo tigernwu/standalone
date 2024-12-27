@@ -35,6 +35,7 @@
                 "risk_folio",
                 "kline_explained",
                 "intraday_analysis",
+                "analyst_rank",
             ]
         },
         {
