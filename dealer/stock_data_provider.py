@@ -4676,6 +4676,16 @@ class StockDataProvider:
             # 如果本地缓存也失败，抛出异常
             raise RuntimeError("Failed to get stock code names from both API and local cache") from e
 
+    def get_stock_code(self,stock_name:str)->str:
+        """
+        获取股票代码
+        """
+        cn =  self.get_code_name()
+        for k,v in cn.items():
+            if v == stock_name:
+                return k
+        return None
+
     def is_stock(self,symbol:str)->bool:
         """
         判断是否是股票
